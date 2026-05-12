@@ -50,7 +50,13 @@ def _process_user(uid_str, user_info, settings, session_data, cutoff_date, dry_r
     return ("unfollowed", username, full_name, post_date)
 
 
-def run(settings: Settings, dry_run: bool = False, months: int = 12, workers: int = 5) -> None:
+def run(
+    settings: Settings,
+    dry_run: bool = False,
+    months: int = 12,
+    workers: int = 5,
+    only_non_followers: bool = True,
+) -> None:
     main_client = InstagramClient(settings)
     main_client.login()
 
@@ -59,7 +65,16 @@ def run(settings: Settings, dry_run: bool = False, months: int = 12, workers: in
 
     following = main_client.rate_limited_call(main_client.get_following)
     items = list(following.items())
-    console.print(f"You follow [bold]{len(items)}[/] users\n")
+
+    if only_non_followers:
+        followers = main_client.rate_limited_call(main_client.get_followers)
+        follower_ids = set(followers.keys())
+        before = len(items)
+        items = [(uid, info) for uid, info in items if uid not in follower_ids]
+        skipped_mutuals = before - len(items)
+        console.print(f"You follow [bold]{before}[/] users, [bold]{skipped_mutuals}[/] follow you back — checking the remaining [bold]{len(items)}[/]\n")
+    else:
+        console.print(f"You follow [bold]{len(items)}[/] users\n")
 
     session_data = main_client.client.get_settings()
 

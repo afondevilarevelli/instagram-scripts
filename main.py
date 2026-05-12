@@ -39,6 +39,12 @@ def main() -> None:
         default=5,
         help="Number of parallel workers (default: 5)",
     )
+    unfollow_parser.add_argument(
+        "--only-non-followers",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Only unfollow users who don't follow you back (default: True)",
+    )
 
     args = parser.parse_args()
 
@@ -54,7 +60,13 @@ def main() -> None:
         if args.command == "unfollow-inactive":
             from scripts.unfollow_inactive import run
 
-            run(settings, dry_run=args.dry_run, months=args.months, workers=args.workers)
+            run(
+                settings,
+                dry_run=args.dry_run,
+                months=args.months,
+                workers=args.workers,
+                only_non_followers=args.only_non_followers,
+            )
     except KeyboardInterrupt:
         print("\nInterrupted by user")
         sys.exit(1)

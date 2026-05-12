@@ -27,6 +27,9 @@ python main.py unfollow-inactive
 
 # Custom period and parallelism
 python main.py unfollow-inactive --months 6 --workers 8
+
+# Also unfollow mutuals (default: only non-followers)
+python main.py unfollow-inactive --no-only-non-followers
 ```
 
 ## Project Structure

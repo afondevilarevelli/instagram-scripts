@@ -49,6 +49,9 @@ class InstagramClient:
     def get_following(self) -> list[dict]:
         return self.client.user_following(self.client.user_id)
 
+    def get_followers(self) -> list[dict]:
+        return self.client.user_followers(self.client.user_id)
+
     def get_user_medias(self, user_id: int, amount: int = 1) -> list[dict]:
         return self.client.user_medias(user_id, amount)
 
