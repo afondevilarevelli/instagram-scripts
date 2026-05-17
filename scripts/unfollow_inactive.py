@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 
 from rich.console import Console
 from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeRemainingColumn
+from rich.prompt import Confirm
+from rich.table import Table
 
 from utils.config import Settings
 from utils.instagram_client import InstagramClient
@@ -18,7 +20,7 @@ MIN_DELAY = 0.5
 MAX_DELAY = 2.0
 
 
-def _process_user(uid_str, user_info, settings, session_data, cutoff_date, dry_run):
+def _check_user(uid_str, user_info, settings, session_data, cutoff_date):
     local_client = InstagramClient(settings, load_session=False)
     local_client.client.set_settings(deepcopy(session_data))
 
@@ -40,14 +42,21 @@ def _process_user(uid_str, user_info, settings, session_data, cutoff_date, dry_r
     if post_date > cutoff_date:
         return ("skip_active", username, full_name, post_date)
 
-    if not dry_run:
-        try:
-            time.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
-            local_client.rate_limited_call(local_client.unfollow, user_id)
-        except Exception:
-            return ("error", username, full_name, post_date)
+    return ("unfollow", username, full_name, post_date)
 
-    return ("unfollowed", username, full_name, post_date)
+
+def _unfollow_user(uid_str, username, full_name, settings, session_data):
+    local_client = InstagramClient(settings, load_session=False)
+    local_client.client.set_settings(deepcopy(session_data))
+
+    user_id = int(uid_str)
+    time.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
+
+    try:
+        local_client.rate_limited_call(local_client.unfollow, user_id)
+        return ("unfollowed", username, full_name)
+    except Exception:
+        return ("error", username, full_name)
 
 
 def run(
@@ -78,7 +87,8 @@ def run(
 
     session_data = main_client.client.get_settings()
 
-    unfollowed = skipped_active = skipped_no_posts = errors = 0
+    skipped_active = skipped_no_posts = errors = 0
+    to_unfollow = []
 
     progress = Progress(
         TextColumn("[progress.description]{task.description}"),
@@ -94,21 +104,17 @@ def run(
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
                 executor.submit(
-                    _process_user, uid, info, settings, session_data, cutoff_date, dry_run
+                    _check_user, uid, info, settings, session_data, cutoff_date
                 ): uid
                 for uid, info in items
             }
 
             for future in as_completed(futures):
+                uid = futures[future]
                 action, username, full_name, post_date = future.result()
 
-                if action == "unfollowed":
-                    unfollowed += 1
-                    days = (datetime.now(timezone.utc) - post_date).days
-                    console.print(
-                        f"  [red]✗[/] @{username} ({full_name}) — last post: "
-                        f"{post_date.strftime('%Y-%m-%d')} ([bold]{days}[/] days ago)"
-                    )
+                if action == "unfollow":
+                    to_unfollow.append((uid, username, full_name, post_date))
                 elif action == "skip_active":
                     skipped_active += 1
                 elif action == "skip_no_posts":
@@ -119,10 +125,64 @@ def run(
 
                 progress.advance(task)
 
-    console.print("\n[bold]Summary:[/]")
-    console.print(f"  Unfollowed: [bold]{unfollowed}[/]")
-    console.print(f"  Skipped (active): [bold]{skipped_active}[/]")
-    console.print(f"  Skipped (no posts): [bold]{skipped_no_posts}[/]")
-    console.print(f"  Errors: [bold]{errors}[/]")
-    if dry_run:
-        console.print("\n[italic]Dry run — no accounts were actually unfollowed[/]")
+    if not dry_run and to_unfollow:
+        table = Table(title="Accounts to unfollow")
+        table.add_column("#", style="dim")
+        table.add_column("Username")
+        table.add_column("Full Name")
+        table.add_column("Last Post")
+
+        for i, (uid, username, full_name, post_date) in enumerate(to_unfollow, 1):
+            table.add_row(
+                str(i),
+                f"@{username}",
+                full_name or "",
+                post_date.strftime("%Y-%m-%d") if post_date else "N/A",
+            )
+
+        console.print()
+        console.print(table)
+        confirmed = Confirm.ask(f"\nProceed with unfollowing [bold]{len(to_unfollow)}[/] accounts?")
+        if not confirmed:
+            console.print("[yellow]Aborted by user[/]")
+            return
+
+    if not dry_run and to_unfollow:
+        console.print()
+        unfollowed = 0
+        errors = 0
+
+        for uid_str, username, full_name, post_date in to_unfollow:
+            result, name, _ = _unfollow_user(uid_str, username, full_name, settings, session_data)
+
+            if result == "unfollowed":
+                unfollowed += 1
+                days = (datetime.now(timezone.utc) - post_date).days
+                console.print(
+                    f"  [red]✗[/] @{username} ({full_name}) — last post: "
+                    f"{post_date.strftime('%Y-%m-%d')} ([bold]{days}[/] days ago)"
+                )
+            else:
+                errors += 1
+
+        console.print("\n[bold]Summary:[/]")
+        console.print(f"  Unfollowed: [bold]{unfollowed}[/]")
+        console.print(f"  Errors: [bold]{errors}[/]")
+    else:
+        for uid, username, full_name, post_date in to_unfollow:
+            days = (datetime.now(timezone.utc) - post_date).days
+            console.print(
+                f"  [red]✗[/] @{username} ({full_name}) — last post: "
+                f"{post_date.strftime('%Y-%m-%d')} ([bold]{days}[/] days ago)"
+            )
+
+        console.print(f"\n[bold]Summary:[/]")
+        console.print(f"  Would unfollow: [bold]{len(to_unfollow)}[/]")
+        console.print(f"  Skipped (active): [bold]{skipped_active}[/]")
+        console.print(f"  Skipped (no posts): [bold]{skipped_no_posts}[/]")
+        console.print(f"  Errors: [bold]{errors}[/]")
+
+        if not to_unfollow:
+            console.print("\n[green]No accounts to unfollow![/]")
+        elif dry_run:
+            console.print("\n[italic]Dry run — no accounts were actually unfollowed[/]")
